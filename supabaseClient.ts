@@ -1,2 +1,2 @@
 
-// This file is no longer needed as we switched to Neon DB
+// تم حذف هذا الملف نهائياً والاعتماد على dbClient.ts (Neon DB)
