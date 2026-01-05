@@ -7,6 +7,20 @@
     <title>نظام إدارة الصندوق الذكي</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <script>
+        // منع انهيار التطبيق بسبب عدم وجود كائن process في المتصفح
+        window.process = { 
+          env: { 
+            DATABASE_URL: "",
+            API_KEY: "" 
+          } 
+        };
+        // التقاط الأخطاء العالمية لعرضها في الكونسول للمساعدة في التشخيص
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+          console.error('Error: ' + msg + '\nURL: ' + url + '\nLine: ' + lineNo + '\nColumn: ' + columnNo + '\nError object: ' + JSON.stringify(error));
+          return false;
+        };
+    </script>
     <style>
         body {
             font-family: 'Tajawal', sans-serif;

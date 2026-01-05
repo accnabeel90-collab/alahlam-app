@@ -24,8 +24,7 @@ import {
   ShieldCheck,
   Zap,
   Info,
-  Search,
-  ChevronLeft
+  Search
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -68,6 +67,7 @@ const App: React.FC = () => {
   const [aiReport, setAiReport] = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [initError, setInitError] = useState<string | null>(null);
   
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
@@ -95,22 +95,28 @@ const App: React.FC = () => {
     setIsLoading(true);
     try {
       if (isNeonEnabled && sql) {
-        const dbUsers = await sql`SELECT * FROM users`;
-        const dbTransactions = await sql`SELECT * FROM transactions ORDER BY date DESC`;
-        
-        if (dbUsers && dbUsers.length > 0) setUsers(dbUsers as any);
-        else initializeLocalUsers();
+        // محاولة جلب البيانات من Neon
+        try {
+          const dbUsers = await sql`SELECT * FROM users`;
+          const dbTransactions = await sql`SELECT * FROM transactions ORDER BY date DESC`;
+          
+          if (dbUsers && dbUsers.length > 0) setUsers(dbUsers as any);
+          else initializeLocalUsers();
 
-        if (dbTransactions) setTransactions(dbTransactions as any);
-        else initializeLocalTransactions();
+          if (dbTransactions) setTransactions(dbTransactions as any);
+          else initializeLocalTransactions();
+        } catch (dbErr) {
+          console.warn("فشل الاتصال بـ Neon، التحول للوضع المحلي:", dbErr);
+          initializeLocalUsers();
+          initializeLocalTransactions();
+        }
       } else {
         initializeLocalUsers();
         initializeLocalTransactions();
       }
     } catch (e) {
-      console.error("Neon DB Error:", e);
-      initializeLocalUsers();
-      initializeLocalTransactions();
+      console.error("General Data Load Error:", e);
+      setInitError("حدث خطأ غير متوقع أثناء تحميل البيانات.");
     } finally {
       setIsLoading(false);
     }
@@ -257,11 +263,31 @@ const App: React.FC = () => {
       const report = await analyzeFinancials(transactions);
       setAiReport(report);
     } catch (e) {
-      setAiReport("عذراً، المحرك الذكي غير متاح حالياً. تأكد من مفتاح API الخاص بـ Gemini.");
+      setAiReport("عذراً، المحرك الذكي غير متاح حالياً.");
     } finally {
       setIsGeneratingAi(false);
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
+        <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
+        <p className="font-bold text-slate-500">جاري تهيئة النظام المالي...</p>
+      </div>
+    );
+  }
+
+  if (initError) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-rose-50 p-6 text-center">
+        <AlertCircle className="text-rose-600 mb-6" size={64} />
+        <h1 className="text-2xl font-black text-slate-900 mb-2">عذراً، حدث خطأ في النظام</h1>
+        <p className="text-slate-500 mb-8">{initError}</p>
+        <button onClick={() => window.location.reload()} className="bg-slate-900 text-white px-8 py-4 rounded-2xl font-bold">إعادة تحميل الصفحة</button>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return (
@@ -645,7 +671,7 @@ const App: React.FC = () => {
 
       {showUserModal && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-2xl z-[100] flex items-center justify-center p-6 animate-in fade-in duration-500">
-          <div className="bg-white rounded-[4rem] w-full max-w-xl shadow-2xl overflow-hidden">
+          <div className="bg-white rounded-[4rem] w-full max-xl shadow-2xl overflow-hidden">
              <div className="p-12 bg-slate-50 flex items-center justify-between border-b border-slate-100">
               <h3 className="text-3xl font-black text-slate-900 tracking-tight">{editingUser ? 'تحديث موظف' : 'إضافة موظف'}</h3>
               <button onClick={() => setShowUserModal(false)} className="text-slate-300 hover:text-slate-900 transition-colors"><XCircle size={40} /></button>

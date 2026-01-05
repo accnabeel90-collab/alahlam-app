@@ -1,39 +1,30 @@
 
 import { neon } from '@neondatabase/serverless';
 
-/**
- * ملاحظة للمبرمج:
- * يرجى تشغيل الاستعلامات التالية في SQL Editor الخاص بـ Neon لتهيئة الجداول:
- * 
- * CREATE TABLE IF NOT EXISTS users (
- *   id TEXT PRIMARY KEY,
- *   name TEXT NOT NULL,
- *   username TEXT UNIQUE NOT NULL,
- *   password TEXT NOT NULL,
- *   role TEXT NOT NULL,
- *   email TEXT
- * );
- * 
- * CREATE TABLE IF NOT EXISTS transactions (
- *   id TEXT PRIMARY KEY,
- *   amount NUMERIC NOT NULL,
- *   type TEXT NOT NULL,
- *   category TEXT NOT NULL,
- *   description TEXT,
- *   date TIMESTAMPTZ DEFAULT NOW(),
- *   "userId" TEXT REFERENCES users(id),
- *   "userName" TEXT,
- *   status TEXT NOT NULL
- * );
- */
+// وظيفة للحصول على متغير البيئة بأمان
+const getEnv = (key: string): string => {
+  try {
+    return (window as any).process?.env?.[key] || (process?.env?.[key]) || "";
+  } catch (e) {
+    return "";
+  }
+};
 
-const databaseUrl = process.env.DATABASE_URL || '';
+const databaseUrl = getEnv('DATABASE_URL');
 
-// إنشاء العميل فقط إذا كان الرابط موجوداً لتجنب الأخطاء
-export const sql = databaseUrl ? neon(databaseUrl) : null;
+// إنشاء العميل مع معالجة الخطأ إذا لم يكن الرابط صالحاً
+let dbSql = null;
+if (databaseUrl && databaseUrl.startsWith('postgres')) {
+  try {
+    dbSql = neon(databaseUrl);
+  } catch (e) {
+    console.error("خطأ في تهيئة عميل Neon:", e);
+  }
+}
 
+export const sql = dbSql;
 export const isNeonEnabled = !!sql;
 
 if (!isNeonEnabled) {
-  console.warn("تنبيه: DATABASE_URL غير معرف. النظام يعمل الآن في وضع التخزين المحلي (LocalStorage).");
+  console.log("نظام Neon غير متصل. يتم استخدام التخزين المحلي فقط.");
 }
