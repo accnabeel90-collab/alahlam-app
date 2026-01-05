@@ -2,9 +2,10 @@
 import { GoogleGenAI } from "@google/genai";
 import { Transaction } from "./types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 export async function analyzeFinancials(transactions: Transaction[]) {
+  // Initialize the AI client inside the function to ensure it uses the latest process.env.API_KEY
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
   const summary = transactions.map(t => ({
     type: t.type,
     amount: t.amount,
