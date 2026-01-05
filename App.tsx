@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   ArrowUpCircle, 
@@ -17,7 +17,8 @@ import {
   User as UserIcon,
   Edit,
   Trash2,
-  Key
+  Key,
+  Loader2
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -32,8 +33,9 @@ import {
   Pie
 } from 'recharts';
 import { User, Transaction, UserRole, TransactionType, TransactionStatus } from './types';
-import { INITIAL_USERS, INITIAL_TRANSACTIONS, CATEGORIES } from './constants';
+import { CATEGORIES } from './constants';
 import { analyzeFinancials } from './geminiService';
+import { supabase } from './supabaseClient';
 
 // Reusable Components
 const Card: React.FC<{ title: string; value: string | number; icon: React.ReactNode; color: string }> = ({ title, value, icon, color }) => (
@@ -50,14 +52,15 @@ const Card: React.FC<{ title: string; value: string | number; icon: React.ReactN
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
-  const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [users, setUsers] = useState<User[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'transactions' | 'reports' | 'users'>('dashboard');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [aiReport, setAiReport] = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
@@ -78,23 +81,65 @@ const App: React.FC = () => {
     email: ''
   });
 
+  // Fetch initial data
+  useEffect(() => {
+    fetchUsers();
+  }, []);
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchTransactions();
+    }
+  }, [currentUser]);
+
+  const fetchUsers = async () => {
+    const { data, error } = await supabase.from('users').select('*');
+    if (error) {
+      console.error('Error fetching users:', error);
+    } else {
+      setUsers(data || []);
+    }
+    setIsLoading(false);
+  };
+
+  const fetchTransactions = async () => {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .order('date', { ascending: false });
+    if (error) {
+      console.error('Error fetching transactions:', error);
+    } else {
+      setTransactions(data || []);
+    }
+  };
+
   // Auth Handling
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
-    if (user) {
-      setCurrentUser(user);
+    setIsLoading(true);
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', loginForm.username)
+      .eq('password', loginForm.password)
+      .single();
+
+    if (data) {
+      setCurrentUser(data);
       setActiveTab('dashboard');
       setLoginError('');
       setLoginForm({ username: '', password: '' });
     } else {
       setLoginError('اسم المستخدم أو كلمة المرور غير صحيحة');
     }
+    setIsLoading(false);
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
     setAiReport(null);
+    setTransactions([]);
   };
 
   // Financial Metrics
@@ -118,11 +163,10 @@ const App: React.FC = () => {
   }, [transactions]);
 
   // Actions
-  const addTransaction = () => {
+  const addTransaction = async () => {
     if (!currentUser || !newTx.amount || !newTx.category) return;
 
-    const transaction: Transaction = {
-      id: Math.random().toString(36).substr(2, 9),
+    const transaction = {
       amount: parseFloat(newTx.amount),
       type: newTx.type,
       category: newTx.category,
@@ -133,31 +177,42 @@ const App: React.FC = () => {
       status: currentUser.role === UserRole.ADMIN ? TransactionStatus.APPROVED : TransactionStatus.PENDING
     };
 
-    setTransactions([transaction, ...transactions]);
-    setShowAddModal(false);
-    setNewTx({ amount: '', type: TransactionType.EXPENSE, category: '', description: '' });
+    const { error } = await supabase.from('transactions').insert([transaction]);
+    if (error) {
+      alert('خطأ في إضافة الحركة');
+    } else {
+      fetchTransactions();
+      setShowAddModal(false);
+      setNewTx({ amount: '', type: TransactionType.EXPENSE, category: '', description: '' });
+    }
   };
 
-  const saveUser = () => {
+  const saveUser = async () => {
     if (editingUser) {
-      setUsers(users.map(u => u.id === editingUser.id ? { ...userForm, id: editingUser.id } : u));
+      const { error } = await supabase.from('users').update(userForm).eq('id', editingUser.id);
+      if (error) alert('خطأ في تحديث المستخدم');
     } else {
-      const newUser: User = { ...userForm, id: Math.random().toString(36).substr(2, 9) };
-      setUsers([...users, newUser]);
+      const { error } = await supabase.from('users').insert([userForm]);
+      if (error) alert('خطأ في إضافة المستخدم');
     }
+    fetchUsers();
     setShowUserModal(false);
     setEditingUser(null);
     setUserForm({ name: '', username: '', password: '', role: UserRole.STAFF, email: '' });
   };
 
-  const deleteUser = (id: string) => {
+  const deleteUser = async (id: string) => {
     if (confirm('هل أنت متأكد من رغبتك في حذف هذا المستخدم؟')) {
-      setUsers(users.filter(u => u.id !== id));
+      const { error } = await supabase.from('users').delete().eq('id', id);
+      if (error) alert('خطأ في حذف المستخدم');
+      else fetchUsers();
     }
   };
 
-  const updateStatus = (id: string, status: TransactionStatus) => {
-    setTransactions(transactions.map(t => t.id === id ? { ...t, status } : t));
+  const updateStatus = async (id: string, status: TransactionStatus) => {
+    const { error } = await supabase.from('transactions').update({ status }).eq('id', id);
+    if (error) alert('خطأ في تحديث الحالة');
+    else fetchTransactions();
   };
 
   const generateAiInsight = async () => {
@@ -190,7 +245,7 @@ const App: React.FC = () => {
                   value={loginForm.username}
                   onChange={e => setLoginForm({...loginForm, username: e.target.value})}
                   className="w-full pr-11 pl-4 py-4 rounded-2xl bg-gray-50 border border-gray-200 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition-all font-medium"
-                  placeholder="admin, sara, mohamed..."
+                  placeholder="اسم المستخدم"
                   required
                 />
               </div>
@@ -211,7 +266,7 @@ const App: React.FC = () => {
             </div>
 
             {loginError && (
-              <div className="bg-rose-50 text-rose-600 p-4 rounded-xl text-sm font-bold flex items-center gap-2 border border-rose-100 animate-pulse">
+              <div className="bg-rose-50 text-rose-600 p-4 rounded-xl text-sm font-bold flex items-center gap-2 border border-rose-100">
                 <XCircle size={18} />
                 {loginError}
               </div>
@@ -219,14 +274,12 @@ const App: React.FC = () => {
 
             <button 
               type="submit"
-              className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold text-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-xl shadow-indigo-100"
+              disabled={isLoading}
+              className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold text-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2"
             >
+              {isLoading && <Loader2 size={20} className="animate-spin" />}
               تسجيل الدخول
             </button>
-            
-            <div className="pt-4 text-center">
-              <p className="text-gray-400 text-xs font-medium">بيانات تجريبية: admin / 123</p>
-            </div>
           </form>
         </div>
       </div>
@@ -245,35 +298,21 @@ const App: React.FC = () => {
         </div>
         
         <nav className="flex-1 p-4 space-y-2">
-          <button 
-            onClick={() => setActiveTab('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}
-          >
+          <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
             <LayoutDashboard size={20} />
             <span>لوحة التحكم</span>
           </button>
-          
-          <button 
-            onClick={() => setActiveTab('transactions')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'transactions' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}
-          >
+          <button onClick={() => setActiveTab('transactions')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'transactions' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
             <FileText size={20} />
             <span>الحركات المالية</span>
           </button>
-
           {currentUser.role === UserRole.ADMIN && (
             <>
-              <button 
-                onClick={() => setActiveTab('reports')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'reports' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}
-              >
+              <button onClick={() => setActiveTab('reports')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'reports' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
                 <PieChartIcon size={20} />
                 <span>التقارير التحليلية</span>
               </button>
-              <button 
-                onClick={() => setActiveTab('users')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'users' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}
-              >
+              <button onClick={() => setActiveTab('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'users' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
                 <UsersIcon size={20} />
                 <span>إدارة المستخدمين</span>
               </button>
@@ -286,10 +325,7 @@ const App: React.FC = () => {
             <p className="text-xs text-gray-500 mb-1">مسجل دخول بصفة</p>
             <p className="font-bold text-sm text-gray-800">{currentUser.name}</p>
           </div>
-          <button 
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-600 hover:bg-red-50 transition-colors"
-          >
+          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-600 hover:bg-red-50 transition-colors">
             <LogOut size={20} />
             <span>تسجيل الخروج</span>
           </button>
@@ -298,7 +334,6 @@ const App: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto">
-        {/* Topbar */}
         <header className="bg-white border-b border-gray-200 p-6 flex items-center justify-between sticky top-0 z-10">
           <h2 className="text-xl font-bold text-gray-800">
             {activeTab === 'dashboard' && 'نظرة عامة'}
@@ -308,22 +343,12 @@ const App: React.FC = () => {
           </h2>
           <div className="flex items-center gap-4">
             {activeTab === 'users' ? (
-              <button 
-                onClick={() => {
-                  setEditingUser(null);
-                  setUserForm({ name: '', username: '', password: '', role: UserRole.STAFF, email: '' });
-                  setShowUserModal(true);
-                }}
-                className="bg-indigo-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-sm"
-              >
+              <button onClick={() => { setEditingUser(null); setUserForm({ name: '', username: '', password: '', role: UserRole.STAFF, email: '' }); setShowUserModal(true); }} className="bg-indigo-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-sm">
                 <Plus size={20} />
                 <span>إضافة مستخدم</span>
               </button>
             ) : (
-              <button 
-                onClick={() => setShowAddModal(true)}
-                className="bg-indigo-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-sm"
-              >
+              <button onClick={() => setShowAddModal(true)} className="bg-indigo-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-sm">
                 <Plus size={20} />
                 <span>إضافة حركة</span>
               </button>
@@ -428,7 +453,7 @@ const App: React.FC = () => {
                       <td className="p-4">
                         <div className="flex items-center gap-2">
                           <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-[10px] font-bold text-indigo-600">
-                            {t.userName.charAt(0)}
+                            {t.userName?.charAt(0) || '؟'}
                           </div>
                           <span className="text-sm text-gray-700">{t.userName}</span>
                         </div>
@@ -455,6 +480,7 @@ const App: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+              {transactions.length === 0 && <div className="p-12 text-center text-gray-500">لا توجد حركات مالية مسجلة بعد.</div>}
             </div>
           )}
 
@@ -480,13 +506,10 @@ const App: React.FC = () => {
                           </div>
                           <div>
                             <p className="font-bold text-gray-800">{u.name}</p>
-                            <p className="text-xs text-gray-400">ID: {u.id}</p>
                           </div>
                         </div>
                       </td>
-                      <td className="p-4">
-                        <code className="bg-gray-100 px-2 py-1 rounded text-indigo-600 text-sm">{u.username}</code>
-                      </td>
+                      <td className="p-4"><code className="bg-gray-100 px-2 py-1 rounded text-indigo-600 text-sm">{u.username}</code></td>
                       <td className="p-4">
                         <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                           u.role === UserRole.ADMIN ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
@@ -497,21 +520,11 @@ const App: React.FC = () => {
                       <td className="p-4 text-gray-500 text-sm">{u.email}</td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
-                          <button 
-                            onClick={() => {
-                              setEditingUser(u);
-                              setUserForm({ ...u });
-                              setShowUserModal(true);
-                            }}
-                            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                          >
+                          <button onClick={() => { setEditingUser(u); setUserForm({ ...u }); setShowUserModal(true); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
                             <Edit size={18} />
                           </button>
                           {u.id !== currentUser.id && (
-                            <button 
-                              onClick={() => deleteUser(u.id)}
-                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                            >
+                            <button onClick={() => deleteUser(u.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
                               <Trash2 size={18} />
                             </button>
                           )}
@@ -536,7 +549,7 @@ const App: React.FC = () => {
               {aiReport && (
                 <div className="bg-indigo-900 text-white p-8 rounded-3xl shadow-xl prose prose-invert max-w-none">
                   <div className="flex items-center gap-3 mb-6"><Sparkles size={24} /><h4 className="text-xl font-bold">تقرير الذكاء الاصطناعي للمدير</h4></div>
-                  {aiReport.split('\n').map((line, i) => <p key={i} className="mb-2 text-indigo-50">{line}</p>)}
+                  <div className="whitespace-pre-wrap text-indigo-50 leading-relaxed">{aiReport}</div>
                 </div>
               )}
             </div>
@@ -547,7 +560,7 @@ const App: React.FC = () => {
       {/* Transaction Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden">
             <div className="p-6 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
               <h3 className="text-xl font-bold text-gray-800">إضافة حركة مالية جديدة</h3>
               <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-gray-600"><XCircle size={24} /></button>
@@ -579,39 +592,12 @@ const App: React.FC = () => {
               <button onClick={() => setShowUserModal(false)} className="text-gray-400 hover:text-gray-600"><XCircle size={24} /></button>
             </div>
             <div className="p-8 space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">الاسم الكامل</label>
-                <div className="relative">
-                  <UserIcon className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                  <input type="text" value={userForm.name} onChange={e => setUserForm({...userForm, name: e.target.value})} className="w-full pr-11 pl-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="أحمد محمد" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">اسم الدخول (Username)</label>
-                <div className="relative">
-                  <Key className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                  <input type="text" value={userForm.username} onChange={e => setUserForm({...userForm, username: e.target.value})} className="w-full pr-11 pl-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="ahmed123" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">كلمة المرور</label>
-                <div className="relative">
-                  <Lock className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                  <input type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} className="w-full pr-11 pl-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••" />
-                </div>
-              </div>
+              <div><label className="block text-sm font-bold text-gray-700 mb-1">الاسم الكامل</label><input type="text" value={userForm.name} onChange={e => setUserForm({...userForm, name: e.target.value})} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="الاسم الكامل" /></div>
+              <div><label className="block text-sm font-bold text-gray-700 mb-1">اسم الدخول</label><input type="text" value={userForm.username} onChange={e => setUserForm({...userForm, username: e.target.value})} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="اسم الدخول" /></div>
+              <div><label className="block text-sm font-bold text-gray-700 mb-1">كلمة المرور</label><input type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••" /></div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">الدور</label>
-                  <select value={userForm.role} onChange={e => setUserForm({...userForm, role: e.target.value as UserRole})} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500">
-                    <option value={UserRole.STAFF}>موظف مالي</option>
-                    <option value={UserRole.ADMIN}>مدير نظام</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">البريد الإلكتروني</label>
-                  <input type="email" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="user@box.com" />
-                </div>
+                <div><label className="block text-sm font-bold text-gray-700 mb-1">الدور</label><select value={userForm.role} onChange={e => setUserForm({...userForm, role: e.target.value as UserRole})} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500"><option value={UserRole.STAFF}>موظف مالي</option><option value={UserRole.ADMIN}>مدير نظام</option></select></div>
+                <div><label className="block text-sm font-bold text-gray-700 mb-1">البريد</label><input type="email" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="البريد" /></div>
               </div>
               <button onClick={saveUser} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg mt-4 transition-all">{editingUser ? 'حفظ التغييرات' : 'إضافة المستخدم'}</button>
             </div>
